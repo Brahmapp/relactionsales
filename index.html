@@ -75,6 +75,19 @@
   .note{background:var(--surface); border:1px dashed var(--line); border-radius:12px;
     padding:10px 12px; font-size:13px; color:var(--sub); margin-bottom:12px;}
   .rankcond{font-size:12px; color:var(--sub); margin:0 2px 8px;}
+  .statgrid{display:grid; grid-template-columns:1fr 1fr; gap:14px; margin-top:10px;}
+  .statlabel{font-size:12px; font-weight:800; color:var(--sub); letter-spacing:.06em;}
+  .statval{font-size:26px; font-weight:800; font-variant-numeric:tabular-nums; line-height:1.3;}
+  .statval small{font-size:12px; color:var(--sub); font-weight:600;}
+  .statgoal{font-size:12.5px; color:var(--sub); margin:4px 0 2px;}
+  .statpct{font-size:13px; font-weight:800; margin-bottom:6px; font-variant-numeric:tabular-nums;}
+  .rankbadge{background:var(--accent-soft); color:var(--accent); font-weight:800; font-size:13px;
+    border-radius:99px; padding:3px 12px; white-space:nowrap;}
+  .rankbadge small{font-weight:600; font-size:11px;}
+  .teamdivider{display:flex; align-items:center; gap:10px; margin:18px 2px 10px;
+    font-size:13.5px; font-weight:800; color:var(--ink);}
+  .teamdivider::before,.teamdivider::after{content:""; flex:1; height:1px; background:var(--line);}
+  .teamdivider::before{max-width:14px;}
   .dtable{border-collapse:collapse; font-size:12px; min-width:100%; white-space:nowrap;
     font-variant-numeric:tabular-nums;}
   .dtable th{position:sticky; top:0; background:var(--ink); color:#fff; font-weight:700;
@@ -101,7 +114,7 @@
      開くと表示されるガイドを参照）
    ============================================================ */
 const firebaseConfig = {
- apiKey: "AIzaSyA6mJFH_DhPbcTTpVrdGtknawQKdCNhZbY",
+  apiKey: "AIzaSyA6mJFH_DhPbcTTpVrdGtknawQKdCNhZbY",
   authDomain: "relaction-salesmanager.firebaseapp.com",
   databaseURL: "https://relaction-salesmanager-default-rtdb.asia-southeast1.firebasedatabase.app",
   projectId: "relaction-salesmanager",
@@ -124,7 +137,7 @@ const SITES = [...STORES, "その他"];
 const MIN_RANK_DAYS = 6;
 const DB_ROOT = "sales-app";
 
-const emptyMonth = () => ({ entries: [], effort: [], goals: { team: {}, member: {}, store: {} } });
+const emptyMonth = () => ({ entries: [], effort: [], goals: { team: {}, member: {}, store: {}, teamEffort: {} } });
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
 const todayStr = () => {
   const d = new Date();
@@ -144,12 +157,13 @@ const shiftMonth = (m, delta) => {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
 };
 const fmt = (n) => (Number(n) || 0).toLocaleString("ja-JP");
-const normalizeMonth = (mo) => ({ ...emptyMonth(), ...(mo || {}), goals: { team: {}, member: {}, store: {}, ...((mo && mo.goals) || {}) } });
+const normalizeMonth = (mo) => ({ ...emptyMonth(), ...(mo || {}), goals: { team: {}, member: {}, store: {}, teamEffort: {}, ...((mo && mo.goals) || {}) } });
 
 /* ================= Firebase 接続 ================= */
 const CONFIG_READY = firebaseConfig && firebaseConfig.apiKey && firebaseConfig.apiKey.indexOf("ここに") === -1;
+const SDK_READY = (typeof firebase !== "undefined");
 let db = null;
-if (CONFIG_READY) {
+if (CONFIG_READY && SDK_READY) {
   try {
     firebase.initializeApp(firebaseConfig);
     db = firebase.database();
@@ -397,19 +411,22 @@ function StoreDetailPage({ store, data, counts, saveMonth, monthNav }) {
 /* ================= ランキング ================= */
 function RankingPage({ master, memberStat, avgOf, teamName, monthNav }) {
   const [tab, setTab] = useState("pt");
-  const eligible = master.members.filter((m) => memberStat(m.id).days.size >= MIN_RANK_DAYS);
   const medal = (i) => (i === 0 ? "🥇" : i === 1 ? "🥈" : i === 2 ? "🥉" : `${i + 1}.`);
 
   const mainList = (list, value) => (
     <div className="card" style={{ padding: 0 }}>
-      {list.length === 0 && <div className="note" style={{ margin: 12 }}>対象者がいません（月間{MIN_RANK_DAYS}勤務以上のメンバーが対象です）。</div>}
-      {list.map((m, i) => (
-        <div key={m.id} className="listrow" style={{ borderTop: i ? "1px solid var(--line)" : "none" }}>
-          <span><span style={{ display: "inline-block", width: 34 }}>{medal(i)}</span><b>{m.name}</b>
-            <small style={{ color: "var(--sub)" }}>　{teamName(m.teamId)}</small></span>
-          <b style={{ fontVariantNumeric: "tabular-nums", color: i < 3 ? "var(--accent)" : "var(--ink)" }}>{value(m)}</b>
-        </div>
-      ))}
+      {list.length === 0 && <div className="note" style={{ margin: 12 }}>メンバーがいません。</div>}
+      {list.map((m, i) => {
+        const days = memberStat(m.id).days.size;
+        return (
+          <div key={m.id} className="listrow" style={{ borderTop: i ? "1px solid var(--line)" : "none" }}>
+            <span><span style={{ display: "inline-block", width: 34 }}>{medal(i)}</span><b>{m.name}</b>
+              <small style={{ color: days >= MIN_RANK_DAYS ? "var(--ok)" : "var(--accent)", fontWeight: 700 }}>　{days}勤務</small>
+              <small style={{ color: "var(--sub)" }}>　{teamName(m.teamId)}</small></span>
+            <b style={{ fontVariantNumeric: "tabular-nums", color: i < 3 ? "var(--accent)" : "var(--ink)" }}>{value(m)}</b>
+          </div>
+        );
+      })}
     </div>
   );
 
@@ -431,12 +448,12 @@ function RankingPage({ master, memberStat, avgOf, teamName, monthNav }) {
         <button className={`chip ${tab === "prod" ? "on" : ""}`} onClick={() => setTab("prod")}>商材別（上位5名）</button>
       </div>
       {tab === "pt" && <React.Fragment>
-        <p className="rankcond">※月間{MIN_RANK_DAYS}勤務以上のメンバーのみ対象</p>
-        {mainList([...eligible].sort((a, b) => memberStat(b.id).pt - memberStat(a.id).pt), (m) => `${fmt(memberStat(m.id).pt)} pt`)}
+        <p className="rankcond">※上位10名を表示。勤務数が{MIN_RANK_DAYS}未満は<b style={{ color: "var(--accent)" }}>赤（暫定）</b>、{MIN_RANK_DAYS}以上は<b style={{ color: "var(--ok)" }}>緑</b>で表示</p>
+        {mainList([...master.members].sort((a, b) => memberStat(b.id).pt - memberStat(a.id).pt).slice(0, 10), (m) => `${fmt(memberStat(m.id).pt)} pt`)}
       </React.Fragment>}
       {tab === "avg" && <React.Fragment>
-        <p className="rankcond">※月間{MIN_RANK_DAYS}勤務以上のメンバーのみ対象</p>
-        {mainList([...eligible].sort((a, b) => avgOf(b.id) - avgOf(a.id)), (m) => avgOf(m.id).toFixed(2))}
+        <p className="rankcond">※上位10名を表示。勤務数が{MIN_RANK_DAYS}未満は<b style={{ color: "var(--accent)" }}>赤（暫定）</b>、{MIN_RANK_DAYS}以上は<b style={{ color: "var(--ok)" }}>緑</b>で表示</p>
+        {mainList([...master.members].sort((a, b) => avgOf(b.id) - avgOf(a.id)).slice(0, 10), (m) => avgOf(m.id).toFixed(2))}
       </React.Fragment>}
       {tab === "prod" && (
         productRanks.length === 0
@@ -501,7 +518,7 @@ function ExportPage({ master, showToast }) {
     const sales = [["月", "稼働日", "チーム", "スタッフ", "現場", "獲得PT", ...ALL_PRODUCTS]];
     const efforts = [["月", "チーム", "スタッフ", "獲得PT"]];
     const goals = [["月", "種別", "対象", "商材", "目標"]];
-    const teamSummary = [["月", "チーム", "総販pt", "努力pt", "チーム目標", "達成率%"]];
+    const teamSummary = [["月", "チーム", "総販pt", "努力pt", "総販目標", "総販達成率%", "努力目標", "努力達成率%"]];
 
     for (const mo of months) {
       const d = normalizeMonth(allMonths[mo]);
@@ -532,9 +549,11 @@ function ExportPage({ master, showToast }) {
       }
       for (const [tid, t] of Object.entries(byTeam)) {
         const goal = d.goals.team[tid] || 0;
-        if (t.pt || t.effort || goal) teamSummary.push([mo, teamName2(tid), t.pt, t.effort, goal || "", goal ? ((t.pt / goal) * 100).toFixed(1) : ""]);
+        const eGoal = (d.goals.teamEffort || {})[tid] || 0;
+        if (t.pt || t.effort || goal || eGoal) teamSummary.push([mo, teamName2(tid), t.pt, t.effort, goal || "", goal ? ((t.pt / goal) * 100).toFixed(1) : "", eGoal || "", eGoal ? ((t.effort / eGoal) * 100).toFixed(1) : ""]);
       }
-      for (const [tid, g] of Object.entries(d.goals.team)) if (g) goals.push([mo, "チーム", teamName2(tid), "", g]);
+      for (const [tid, g] of Object.entries(d.goals.team)) if (g) goals.push([mo, "チーム総販", teamName2(tid), "", g]);
+      for (const [tid, g] of Object.entries(d.goals.teamEffort || {})) if (g) goals.push([mo, "チーム努力", teamName2(tid), "", g]);
       for (const [id, g] of Object.entries(d.goals.member)) if (g) goals.push([mo, "個人", memberName2(id), "", g]);
       for (const [st, obj] of Object.entries(d.goals.store)) for (const [p, g] of Object.entries(obj || {})) if (g) goals.push([mo, "店舗", st, p, g]);
     }
@@ -630,6 +649,7 @@ function SettingsPage({ master, saveMaster, showToast }) {
   const [teamNameInput, setTeamNameInput] = useState("");
   const [memberNameInput, setMemberNameInput] = useState("");
   const [memberTeam, setMemberTeam] = useState("");
+  const [selectedId, setSelectedId] = useState(null);
 
   const addTeam = () => {
     const name = teamNameInput.trim();
@@ -675,21 +695,44 @@ function SettingsPage({ master, saveMaster, showToast }) {
         </div>
         <button className="wide" style={{ marginTop: 12 }} onClick={addMember}>メンバー追加</button>
       </div>
-      <div className="sectionlabel">登録済みメンバー（所属チームはタップで変更）</div>
+      <div className="sectionlabel">登録済みメンバー（名前をタップで編集）</div>
       {master.members.length === 0 && <div className="note">メンバーはまだいません。</div>}
-      {master.members.map((m) => (
-        <div key={m.id} className="card">
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-            <b>{m.name}</b>
-            <button className="mini danger" onClick={() => delMember(m.id)}>削除</button>
+      {[...master.teams, { id: "__none", name: "未所属" }].map((t) => {
+        const list = t.id === "__none"
+          ? master.members.filter((m) => !master.teams.some((tt) => tt.id === m.teamId))
+          : master.members.filter((m) => m.teamId === t.id);
+        if (list.length === 0) return null;
+        const sel = list.find((m) => m.id === selectedId);
+        return (
+          <div key={t.id}>
+            <div className="teamdivider">{t.name}<small style={{ color: "var(--sub)", fontWeight: 600 }}>（{list.length}名）</small></div>
+            <div className="chips">
+              {list.map((m) => (
+                <button key={m.id} className={`chip ${selectedId === m.id ? "on" : ""}`}
+                  onClick={() => setSelectedId(selectedId === m.id ? null : m.id)}>{m.name}</button>
+              ))}
+            </div>
+            {sel && (
+              <div className="card" style={{ marginTop: 10 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+                  <b>{sel.name} の編集</b>
+                  <span style={{ display: "flex", gap: 8 }}>
+                    <button className="mini danger" onClick={() => { delMember(sel.id); setSelectedId(null); }}>削除</button>
+                    <button className="mini ghost" onClick={() => setSelectedId(null)}>閉じる</button>
+                  </span>
+                </div>
+                <div className="fieldlabel">所属チーム（タップで変更）</div>
+                <div className="chips">
+                  {master.teams.map((tt) => (
+                    <button key={tt.id} className={`chip ${sel.teamId === tt.id ? "on" : ""}`}
+                      onClick={() => moveMember(sel.id, tt.id)}>{tt.name}</button>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
-          <div className="chips" style={{ marginTop: 8 }}>
-            {master.teams.map((t) => (
-              <button key={t.id} className={`chip ${m.teamId === t.id ? "on" : ""}`} onClick={() => moveMember(m.id, t.id)}>{t.name}</button>
-            ))}
-          </div>
-        </div>
-      ))}
+        );
+      })}
       <div className="sectionlabel">登録済みチーム</div>
       {master.teams.length === 0 && <div className="note">チームはまだありません。</div>}
       {master.teams.map((t) => (
@@ -828,6 +871,17 @@ function SalesApp() {
   const memberName = (id) => (master.members.find((m) => m.id === id) || {}).name || "（削除済）";
   const teamName = (id) => (master.teams.find((t) => t.id === id) || {}).name || "未所属";
 
+  // チーム達成率ランキング（総販目標が設定されているチームのみ対象）
+  const teamRankInfo = useMemo(() => {
+    const ranked = master.teams
+      .map((t) => { const s = stats.byTeam[t.id] || { pt: 0 }; const g = data.goals.team[t.id] || 0; return { id: t.id, pct: g > 0 ? s.pt / g : null }; })
+      .filter((x) => x.pct != null)
+      .sort((a, b) => b.pct - a.pct);
+    const map = {};
+    ranked.forEach((x, i) => { map[x.id] = i + 1; });
+    return { map, total: ranked.length };
+  }, [master, stats, data]);
+
   const monthNav = <MonthNav month={month} setMonth={setMonth} />;
 
   /* ---------- 各ページ（状態を持たないものはインライン定義） ---------- */
@@ -872,19 +926,32 @@ function SalesApp() {
       {master.teams.map((t) => {
         const s = stats.byTeam[t.id] || { pt: 0, effort: 0 };
         const goal = data.goals.team[t.id] || 0;
+        const eGoal = data.goals.teamEffort[t.id] || 0;
         const pct = goal > 0 ? (s.pt / goal) * 100 : null;
+        const ePct = eGoal > 0 ? (s.effort / eGoal) * 100 : null;
+        const rank = teamRankInfo.map[t.id];
         return (
           <button key={t.id} className="card tap" onClick={() => push({ page: "team", teamId: t.id })}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
-              <span style={{ fontWeight: 800, fontSize: 17 }}>{t.name}</span>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <span style={{ fontWeight: 800, fontSize: 17 }}>{t.name}{rank && <span className="rankbadge" style={{ marginLeft: 8 }}>{rank}位</span>}</span>
               <span className="chev">▸</span>
             </div>
-            <div className="bignum">{fmt(s.pt)}<small> pt</small><span className="slash">／</span><span className="effort">努力 {fmt(s.effort)} pt</span></div>
-            <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, color: "var(--sub)", margin: "6px 0 6px" }}>
-              <span>目標 {goal ? `${fmt(goal)} pt` : "未設定"}</span>
-              <span style={{ fontWeight: 700, color: pct != null && pct >= 100 ? "var(--ok)" : "var(--ink)" }}>{pct != null ? `達成率 ${pct.toFixed(1)}%` : ""}</span>
+            <div className="statgrid">
+              <div>
+                <div className="statlabel">総販</div>
+                <div className="statval" style={{ fontSize: 22 }}>{fmt(s.pt)}<small> pt</small></div>
+                <div className="statgoal">目標総販 {goal ? `${fmt(goal)} pt` : "未設定"}</div>
+                <div className="statpct" style={{ color: pct != null && pct >= 100 ? "var(--ok)" : "var(--ink)" }}>達成率 {pct != null ? `${pct.toFixed(1)}%` : "—"}</div>
+                <Bar pct={pct ?? 0} />
+              </div>
+              <div>
+                <div className="statlabel">努力</div>
+                <div className="statval" style={{ fontSize: 22 }}>{fmt(s.effort)}<small> pt</small></div>
+                <div className="statgoal">目標努力 {eGoal ? `${fmt(eGoal)} pt` : "未設定"}</div>
+                <div className="statpct" style={{ color: ePct != null && ePct >= 100 ? "var(--ok)" : "var(--ink)" }}>達成率 {ePct != null ? `${ePct.toFixed(1)}%` : "—"}</div>
+                <Bar pct={ePct ?? 0} />
+              </div>
             </div>
-            <Bar pct={pct ?? 0} />
           </button>
         );
       })}
@@ -896,22 +963,43 @@ function SalesApp() {
     if (!t) return <div className="note">チームが見つかりません。</div>;
     const s = stats.byTeam[t.id] || { pt: 0, effort: 0 };
     const goal = data.goals.team[t.id] || 0;
+    const eGoal = data.goals.teamEffort[t.id] || 0;
     const pct = goal > 0 ? (s.pt / goal) * 100 : null;
+    const ePct = eGoal > 0 ? (s.effort / eGoal) * 100 : null;
+    const rank = teamRankInfo.map[t.id];
     const members = master.members.filter((m) => m.teamId === t.id);
     return (
       <div>
         {monthNav}
         <div className="card">
-          <div style={{ fontWeight: 800, fontSize: 19 }}>{t.name}</div>
-          <div className="bignum" style={{ fontSize: 30 }}>{fmt(s.pt)}<small> pt</small><span className="slash">／</span><span className="effort">努力 {fmt(s.effort)} pt</span></div>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 13, color: "var(--sub)", margin: "8px 0 6px" }}>
-            <span>目標 {goal ? `${fmt(goal)} pt` : "未設定"}　
-              <GoalEditor label={goal ? "変更" : "目標を設定"} value={goal}
-                onSave={(v) => saveMonth({ ...data, goals: { ...data.goals, team: { ...data.goals.team, [t.id]: v } } })} />
-            </span>
-            <span style={{ fontWeight: 700, color: pct != null && pct >= 100 ? "var(--ok)" : "var(--ink)" }}>{pct != null ? `達成率 ${pct.toFixed(1)}%` : ""}</span>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <span style={{ fontWeight: 800, fontSize: 19 }}>{t.name}</span>
+            {rank
+              ? <span className="rankbadge">達成率 {rank}位<small>／{teamRankInfo.total}チーム</small></span>
+              : <span style={{ fontSize: 12, color: "var(--sub)" }}>目標未設定（順位対象外）</span>}
           </div>
-          <Bar pct={pct ?? 0} />
+          <div className="statgrid">
+            <div>
+              <div className="statlabel">総販</div>
+              <div className="statval">{fmt(s.pt)}<small> pt</small></div>
+              <div className="statgoal">目標総販 {goal ? `${fmt(goal)} pt` : "未設定"}　
+                <GoalEditor label={goal ? "変更" : "設定"} value={goal}
+                  onSave={(v) => saveMonth({ ...data, goals: { ...data.goals, team: { ...data.goals.team, [t.id]: v } } })} />
+              </div>
+              <div className="statpct" style={{ color: pct != null && pct >= 100 ? "var(--ok)" : "var(--ink)" }}>達成率 {pct != null ? `${pct.toFixed(1)}%` : "—"}</div>
+              <Bar pct={pct ?? 0} />
+            </div>
+            <div>
+              <div className="statlabel">努力</div>
+              <div className="statval">{fmt(s.effort)}<small> pt</small></div>
+              <div className="statgoal">目標努力 {eGoal ? `${fmt(eGoal)} pt` : "未設定"}　
+                <GoalEditor label={eGoal ? "変更" : "設定"} value={eGoal}
+                  onSave={(v) => saveMonth({ ...data, goals: { ...data.goals, teamEffort: { ...data.goals.teamEffort, [t.id]: v } } })} />
+              </div>
+              <div className="statpct" style={{ color: ePct != null && ePct >= 100 ? "var(--ok)" : "var(--ink)" }}>達成率 {ePct != null ? `${ePct.toFixed(1)}%` : "—"}</div>
+              <Bar pct={ePct ?? 0} />
+            </div>
+          </div>
         </div>
         <div className="sectionlabel">メンバー</div>
         {members.length === 0 && <div className="note">メンバーがいません。</div>}
@@ -1115,8 +1203,29 @@ function SalesApp() {
   );
 }
 
+/* Firebaseに接続できない環境（Claudeのプレビュー等）用の案内 */
+function PreviewNotice() {
+  return (
+    <div className="app">
+      <div className="header"><span style={{ fontWeight: 800 }}>営業成績管理</span></div>
+      <div className="container">
+        <div className="note" style={{ borderColor: "var(--accent)", color: "var(--ink)", fontWeight: 700 }}>
+          Firebaseの設定は完了しています ✅
+        </div>
+        <div className="card" style={{ lineHeight: 1.9 }}>
+          今開いているのはプレビュー環境のため、セキュリティ制限でデータベース（Firebase）への接続がブロックされています。アプリ本体はここでは表示できません。<br /><br />
+          <b>実際の動作確認は次のどちらかで行ってください：</b><br />
+          ① このファイルをGitHubにアップロードし、GitHub Pagesで公開したURLを開く（推奨）<br />
+          ② パソコンでこのファイルをダウンロードし、ダブルクリックしてブラウザで直接開く<br /><br />
+          どちらの方法でも同じFirebaseに接続されるので、表示されるデータは共通です。
+        </div>
+      </div>
+    </div>
+  );
+}
+
 const root = ReactDOM.createRoot(document.getElementById("root"));
-root.render(CONFIG_READY && db ? <SalesApp /> : <SetupGuide />);
+root.render(!CONFIG_READY ? <SetupGuide /> : (db ? <SalesApp /> : <PreviewNotice />));
 </script>
 </body>
 </html>
