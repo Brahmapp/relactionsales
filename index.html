@@ -75,6 +75,7 @@
   .note{background:var(--surface); border:1px dashed var(--line); border-radius:12px;
     padding:10px 12px; font-size:13px; color:var(--sub); margin-bottom:12px;}
   .rankcond{font-size:12px; color:var(--sub); margin:0 2px 8px;}
+  .histgrid{display:grid; grid-template-columns:1fr 1fr; gap:12px; align-items:start;}
   .statgrid{display:grid; grid-template-columns:1fr 1fr; gap:14px; margin-top:10px;}
   .statlabel{font-size:12px; font-weight:800; color:var(--sub); letter-spacing:.06em;}
   .statval{font-size:26px; font-weight:800; font-variant-numeric:tabular-nums; line-height:1.3;}
@@ -157,6 +158,11 @@ const shiftMonth = (m, delta) => {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
 };
 const fmt = (n) => (Number(n) || 0).toLocaleString("ja-JP");
+// pt数値の無害化：負の数・数値以外は0に。小数は第二位まで保持する
+const toPt = (v) => {
+  const n = Number(v);
+  return Number.isFinite(n) && n > 0 ? Math.round(n * 100) / 100 : 0;
+};
 const normalizeMonth = (mo) => ({ ...emptyMonth(), ...(mo || {}), goals: { team: {}, member: {}, store: {}, teamEffort: {}, ...((mo && mo.goals) || {}) } });
 
 /* ================= Firebase 接続 ================= */
@@ -195,7 +201,7 @@ function Bar({ pct }) {
 }
 
 function Counter({ value, onChange }) {
-  const v = value || 0;
+  const v = toPt(value);
   return (
     <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
       <button className="cbtn" onClick={() => onChange(Math.max(0, v - 1))} aria-label="減らす">−</button>
@@ -219,7 +225,7 @@ function GoalEditor({ label, value, onSave }) {
     <span style={{ display: "inline-flex", gap: 6, alignItems: "center" }}>
       <input className="input" type="number" inputMode="numeric" value={val} onChange={(e) => setVal(e.target.value)}
         style={{ width: 90, padding: "4px 8px" }} placeholder="目標pt" autoFocus />
-      <button className="mini" onClick={() => { onSave(Number(val) || 0); setEditing(false); }}>保存</button>
+      <button className="mini" onClick={() => { onSave(toPt(val)); setEditing(false); }}>保存</button>
       <button className="mini ghost" onClick={() => setEditing(false)}>取消</button>
     </span>
   );
@@ -284,10 +290,24 @@ function SalesInputPage({ master, data, saveMonth, showToast, back, entryId }) {
     const entry = {
       id: editing ? editing.id : uid(),
       memberId, date, site,
-      pt: Number(pt) || 0,
-      products: Object.fromEntries(Object.entries(products).filter(([, v]) => v > 0)),
+      pt: toPt(pt),
+      products: Object.fromEntries(Object.entries(products).map(([k, v]) => [k, toPt(v)]).filter(([, v]) => v > 0)),
       updatedAt: Date.now(),
     };
+    // 確定前の内容確認＋同一スタッフ・同一日の重複チェック
+    const staff = master.members.find((m) => m.id === memberId);
+    const prodStr = Object.entries(entry.products).map(([p, c]) => `${p}×${c}`).join("、") || "なし";
+    const dup = data.entries.some((e) => e.memberId === memberId && e.date === date && (!editing || e.id !== editing.id));
+    const msg =
+      "【入力内容の確認】\n" +
+      `スタッフ：${staff ? staff.name : "？"}\n` +
+      `稼働日：${date}${date === todayStr() ? "（今日）" : "（⚠ 今日ではありません）"}\n` +
+      `現場：${site}\n` +
+      `獲得PT：${entry.pt}\n` +
+      `内訳：${prodStr}\n` +
+      (dup ? `\n⚠ ${date} には既にこのスタッフの入力があります。重複入力や日付の変更忘れではないか確認してください。\n` : "") +
+      "\nこの内容で確定しますか？";
+    if (!window.confirm(msg)) return;
     const entries = editing ? data.entries.map((e) => (e.id === entry.id ? entry : e)) : [...data.entries, entry];
     await saveMonth({ ...data, entries });
     showToast(editing ? "修正を保存しました" : "確定しました（各成績に反映済み）");
@@ -322,8 +342,10 @@ function SalesInputPage({ master, data, saveMonth, showToast, back, entryId }) {
             <button key={s} className={`chip ${site === s ? "on" : ""}`} onClick={() => setSite(s)}>{s}</button>
           ))}
         </div>
-        <div className="fieldlabel" style={{ marginTop: 14 }}>獲得PT（半角数字）</div>
-        <input className="input" type="number" inputMode="numeric" value={pt} onChange={(e) => setPt(e.target.value)} placeholder="例：12" />
+        <div className="fieldlabel" style={{ marginTop: 14 }}>獲得PT（半角数字・小数点第二位まで可）</div>
+        <input className="input" type="text" inputMode="decimal" value={pt}
+          onChange={(e) => setPt(e.target.value.replace(/[^0-9.]/g, "").replace(/^(\d*\.\d*).*$/, "$1"))}
+          placeholder="例：12.5" />
       </div>
       <div className="sectionlabel">内訳（その日獲得した商材）</div>
       {section("メイン商材", MAIN_PRODUCTS, mainOpen, () => setMainOpen(!mainOpen))}
@@ -348,7 +370,7 @@ function EffortInputPage({ master, data, saveMonth, showToast, back, effortId })
   const confirm = async () => {
     if (!memberId) { showToast("スタッフを選択してください"); return; }
     if (!pt) { showToast("PTを選択してください"); return; }
-    const rec = { id: editing ? editing.id : uid(), memberId, pt: Number(pt) || 0, updatedAt: Date.now() };
+    const rec = { id: editing ? editing.id : uid(), memberId, pt: toPt(pt), updatedAt: Date.now() };
     const effort = editing ? data.effort.map((e) => (e.id === rec.id ? rec : e)) : [...data.effort, rec];
     await saveMonth({ ...data, effort });
     showToast(editing ? "修正を保存しました" : "確定しました（努力ポイントに加算）");
@@ -383,7 +405,7 @@ function StoreDetailPage({ store, data, counts, saveMonth, monthNav }) {
   const goals = data.goals.store[store] || {};
   const rows = ALL_PRODUCTS.filter((p) => counts[p] || goals[p] || editGoals);
   const setGoal = (p, v) =>
-    saveMonth({ ...data, goals: { ...data.goals, store: { ...data.goals.store, [store]: { ...goals, [p]: Number(v) || 0 } } } });
+    saveMonth({ ...data, goals: { ...data.goals, store: { ...data.goals.store, [store]: { ...goals, [p]: toPt(v) } } } });
   return (
     <div>
       {monthNav}
@@ -579,13 +601,13 @@ function ExportPage({ master, showToast }) {
       const get = (id) => (stat[id] = stat[id] || { pt: 0, effort: 0, days: new Set(), products: {} });
       for (const e of d.entries) {
         const s = get(e.memberId);
-        s.pt += Number(e.pt) || 0;
+        s.pt += toPt(e.pt);
         if (e.date) s.days.add(e.date);
         sales.push([mo, e.date, teamOf(e.memberId), memberName2(e.memberId), e.site, e.pt,
           ...ALL_PRODUCTS.map((p) => (e.products && e.products[p]) || "")]);
       }
       for (const f of d.effort) {
-        get(f.memberId).effort += Number(f.pt) || 0;
+        get(f.memberId).effort += toPt(f.pt);
         efforts.push([mo, teamOf(f.memberId), memberName2(f.memberId), f.pt]);
       }
       for (const [id, s] of Object.entries(stat)) {
@@ -741,40 +763,51 @@ function HistoryPage({ master, data, saveMonth, showToast, push, memberName, tea
           <button key={k} className={`chip ${sortKey === k ? "on" : ""}`} onClick={() => setSortKey(k)}>{l}</button>
         ))}
       </div>
-      <div className="sectionlabel">販売入力（{sales.length}件）</div>
-      {sales.length === 0 && <div className="note">この月の販売入力はありません。</div>}
-      {sales.map((e) => (
-        <div key={e.id} className="card">
-          <div style={{ display: "flex", justifyContent: "space-between", fontWeight: 700 }}>
-            <span>{memberName(e.memberId)}<small style={{ color: "var(--sub)", fontWeight: 600 }}>　{teamName((master.members.find((m) => m.id === e.memberId) || {}).teamId)}</small></span>
-            <span style={{ fontVariantNumeric: "tabular-nums" }}>{fmt(e.pt)} pt</span>
-          </div>
-          <div style={{ fontSize: 12, color: "var(--sub)", margin: "4px 0" }}>
-            稼働日 {e.date}　{e.site}{e.updatedAt ? `　入力 ${timeStr(e.updatedAt)}` : ""}
-          </div>
-          {Object.keys(e.products || {}).length > 0 && (
-            <div style={{ fontSize: 12, color: "var(--sub)" }}>
-              {Object.entries(e.products).map(([p, c]) => `${p}×${c}`).join("　")}
+      <div className="histgrid">
+        <div>
+          <div className="sectionlabel" style={{ marginTop: 4 }}>販売入力（{sales.length}件）</div>
+          {sales.length === 0 && <div className="note">この月の販売入力はありません。</div>}
+          {sales.map((e) => (
+            <div key={e.id} className="card" style={{ padding: 12 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", fontWeight: 700, fontSize: 14 }}>
+                <span>{memberName(e.memberId)}</span>
+                <span style={{ fontVariantNumeric: "tabular-nums" }}>{fmt(e.pt)} pt</span>
+              </div>
+              <div style={{ fontSize: 11, color: "var(--sub)" }}>{teamName((master.members.find((m) => m.id === e.memberId) || {}).teamId)}</div>
+              <div style={{ fontSize: 11.5, color: "var(--sub)", margin: "3px 0" }}>
+                稼働 {e.date}<br />{e.site}{e.updatedAt ? `　入力 ${timeStr(e.updatedAt)}` : ""}
+              </div>
+              {Object.keys(e.products || {}).length > 0 && (
+                <div style={{ fontSize: 11.5, color: "var(--sub)" }}>
+                  {Object.entries(e.products).map(([p, c]) => `${p}×${c}`).join("　")}
+                </div>
+              )}
+              <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
+                <button className="mini" onClick={() => push({ page: "salesInput", entryId: e.id })}>修正</button>
+                <button className="mini danger" onClick={() => delSale(e.id)}>削除</button>
+              </div>
             </div>
-          )}
-          <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
-            <button className="mini" onClick={() => push({ page: "salesInput", entryId: e.id })}>修正</button>
-            <button className="mini danger" onClick={() => delSale(e.id)}>削除</button>
-          </div>
+          ))}
         </div>
-      ))}
-      <div className="sectionlabel">努力ポイント入力（{efforts.length}件）</div>
-      {efforts.length === 0 && <div className="note">この月の努力ポイント入力はありません。</div>}
-      {efforts.map((e) => (
-        <div key={e.id} className="card row">
-          <span style={{ fontWeight: 700 }}>{memberName(e.memberId)}</span>
-          <span style={{ display: "flex", gap: 8, alignItems: "center" }}>
-            <b style={{ fontVariantNumeric: "tabular-nums" }}>{fmt(e.pt)} pt</b>
-            <button className="mini" onClick={() => push({ page: "effortInput", effortId: e.id })}>修正</button>
-            <button className="mini danger" onClick={() => delEffort(e.id)}>削除</button>
-          </span>
+        <div>
+          <div className="sectionlabel" style={{ marginTop: 4 }}>努力ポイント入力（{efforts.length}件）</div>
+          {efforts.length === 0 && <div className="note">この月の努力ポイント入力はありません。</div>}
+          {efforts.map((e) => (
+            <div key={e.id} className="card" style={{ padding: 12 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", fontWeight: 700, fontSize: 14 }}>
+                <span>{memberName(e.memberId)}</span>
+                <span style={{ fontVariantNumeric: "tabular-nums" }}>{fmt(e.pt)} pt</span>
+              </div>
+              <div style={{ fontSize: 11, color: "var(--sub)" }}>{teamName((master.members.find((m) => m.id === e.memberId) || {}).teamId)}</div>
+              {e.updatedAt && <div style={{ fontSize: 11.5, color: "var(--sub)", margin: "3px 0" }}>入力 {timeStr(e.updatedAt)}</div>}
+              <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
+                <button className="mini" onClick={() => push({ page: "effortInput", effortId: e.id })}>修正</button>
+                <button className="mini danger" onClick={() => delEffort(e.id)}>削除</button>
+              </div>
+            </div>
+          ))}
         </div>
-      ))}
+      </div>
     </div>
   );
 }
@@ -980,11 +1013,11 @@ function SalesApp() {
     const get = (id) => (byMember[id] = byMember[id] || { pt: 0, effort: 0, days: new Set(), products: {} });
     for (const e of data.entries) {
       const s = get(e.memberId);
-      s.pt += Number(e.pt) || 0;
+      s.pt += toPt(e.pt);
       if (e.date) s.days.add(e.date);
       for (const [p, c] of Object.entries(e.products || {})) if (c) s.products[p] = (s.products[p] || 0) + c;
     }
-    for (const f of data.effort) get(f.memberId).effort += Number(f.pt) || 0;
+    for (const f of data.effort) get(f.memberId).effort += toPt(f.pt);
 
     const byTeam = {};
     for (const mem of master.members) {
