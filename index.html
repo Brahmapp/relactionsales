@@ -382,15 +382,21 @@ function EffortInputPage({ master, data, saveMonth, showToast, back, effortId })
   const [teamId, setTeamId] = useState(editing ? ((master.members.find((m) => m.id === editing.memberId) || {}).teamId || "") : "");
   const [memberId, setMemberId] = useState(editing ? editing.memberId : "");
   const [pt, setPt] = useState(editing ? String(editing.pt) : "");
+  const [date, setDate] = useState(editing ? (editing.date || todayStr()) : todayStr());
+  const [organizers, setOrganizers] = useState(editing ? (editing.organizers || []) : []);
+
+  const toggleOrganizer = (id) =>
+    setOrganizers((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
 
   const confirm = async () => {
     if (!memberId) { showToast("スタッフを選択してください"); return; }
     if (!pt) { showToast("PTを選択してください"); return; }
-    const rec = { id: editing ? editing.id : uid(), memberId, pt: toPt(pt), updatedAt: Date.now() };
+    if (!/^\d{4}\/\d{2}\/\d{2}$/.test(date)) { showToast("実施日は YYYY/MM/DD 形式（半角）で入力してください"); return; }
+    const rec = { id: editing ? editing.id : uid(), memberId, pt: toPt(pt), date, organizers, updatedAt: Date.now() };
     const effort = editing ? data.effort.map((e) => (e.id === rec.id ? rec : e)) : [...data.effort, rec];
     await saveMonth({ ...data, effort });
     showToast(editing ? "修正を保存しました" : "確定しました（努力ポイントに加算）");
-    if (editing) back(); else { setMemberId(""); setPt(""); }
+    if (editing) back(); else { setMemberId(""); setPt(""); setDate(todayStr()); setOrganizers([]); }
   };
 
   return (
@@ -398,6 +404,8 @@ function EffortInputPage({ master, data, saveMonth, showToast, back, effortId })
       <div className="card">
         <StaffPicker master={master} teamId={teamId} memberId={memberId}
           onTeam={(t) => { setTeamId(t); setMemberId(""); }} onMember={setMemberId} />
+        <div className="fieldlabel" style={{ marginTop: 14 }}>実施日（YYYY/MM/DD・半角）</div>
+        <input className="input" value={date} onChange={(e) => setDate(e.target.value)} placeholder="2026/07/06" />
         <div className="fieldlabel" style={{ marginTop: 14 }}>獲得PT（タップで選択）</div>
         <div className="chips">
           {[1, 2].map((v) => (
@@ -405,6 +413,14 @@ function EffortInputPage({ master, data, saveMonth, showToast, back, effortId })
               style={{ padding: "10px 26px", fontSize: 16 }}
               onClick={() => setPt(String(v))}>{v} pt</button>
           ))}
+        </div>
+        <div className="fieldlabel" style={{ marginTop: 14 }}>主催者（複数選択可・任意）</div>
+        <div className="chips">
+          {master.members.map((m) => (
+            <button key={m.id} className={`chip ${organizers.includes(m.id) ? "on" : ""}`}
+              onClick={() => toggleOrganizer(m.id)}>{m.name}</button>
+          ))}
+          {master.members.length === 0 && <span className="note" style={{ margin: 0 }}>メンバーが未登録です。</span>}
         </div>
       </div>
       <button className="wide" style={{ marginTop: 16 }} onClick={confirm}>{editing ? "修正を保存する" : "確定する"}</button>
@@ -497,6 +513,7 @@ function RankingPage({ master, memberStat, avgOf, teamName, monthNav, teamRankIn
       <div className="chips" style={{ marginBottom: 12 }}>
         <button className={`chip ${tab === "pt" ? "on" : ""}`} onClick={() => setTab("pt")}>総販</button>
         <button className={`chip ${tab === "avg" ? "on" : ""}`} onClick={() => setTab("avg")}>月間アベレージ</button>
+        <button className={`chip ${tab === "effort" ? "on" : ""}`} onClick={() => setTab("effort")}>個人努力pt</button>
         <button className={`chip ${tab === "prod" ? "on" : ""}`} onClick={() => setTab("prod")}>商材別（上位5名）</button>
         <button className={`chip ${tab === "team" ? "on" : ""}`} onClick={() => setTab("team")}>チーム</button>
       </div>
@@ -507,6 +524,10 @@ function RankingPage({ master, memberStat, avgOf, teamName, monthNav, teamRankIn
       {tab === "avg" && <React.Fragment>
         <p className="rankcond">※上位10名を表示。勤務数が{MIN_RANK_DAYS}未満は<b style={{ color: "var(--accent)" }}>赤（暫定）</b>、{MIN_RANK_DAYS}以上は<b style={{ color: "var(--ok)" }}>緑</b>で表示</p>
         {mainList([...master.members].sort((a, b) => avgOf(b.id) - avgOf(a.id)).slice(0, 10), (m) => avgOf(m.id).toFixed(2))}
+      </React.Fragment>}
+      {tab === "effort" && <React.Fragment>
+        <p className="rankcond">※上位10名を表示（努力ポイントの月間合計）</p>
+        {mainList([...master.members].sort((a, b) => memberStat(b.id).effort - memberStat(a.id).effort).slice(0, 10), (m) => `${fmt(memberStat(m.id).effort)} pt`)}
       </React.Fragment>}
       {tab === "prod" && (
         productRanks.length === 0
@@ -607,7 +628,7 @@ function ExportPage({ master, showToast }) {
     const months = Object.keys(allMonths || {}).sort();
     const summary = [["月", "チーム", "スタッフ", "総販pt", "稼働日数", "月間アベレージ", "努力pt", "個人目標", "達成率%"]];
     const sales = [["月", "稼働日", "チーム", "スタッフ", "現場", "獲得PT", ...ALL_PRODUCTS]];
-    const efforts = [["月", "チーム", "スタッフ", "獲得PT"]];
+    const efforts = [["月", "実施日", "チーム", "スタッフ", "獲得PT", "主催者"]];
     const goals = [["月", "種別", "対象", "商材", "目標"]];
     const teamSummary = [["月", "チーム", "総販pt", "努力pt", "総販目標", "総販達成率%", "努力目標", "努力達成率%"]];
 
@@ -624,7 +645,8 @@ function ExportPage({ master, showToast }) {
       }
       for (const f of d.effort) {
         get(f.memberId).effort += toPt(f.pt);
-        efforts.push([mo, teamOf(f.memberId), memberName2(f.memberId), f.pt]);
+        efforts.push([mo, f.date || "", teamOf(f.memberId), memberName2(f.memberId), f.pt,
+          (f.organizers || []).map((id) => memberName2(id)).join("、")]);
       }
       for (const [id, s] of Object.entries(stat)) {
         const goal = d.goals.member[id] || 0;
@@ -815,6 +837,12 @@ function HistoryPage({ master, data, saveMonth, showToast, push, memberName, tea
                 <span style={{ fontVariantNumeric: "tabular-nums" }}>{fmt(e.pt)} pt</span>
               </div>
               <div style={{ fontSize: 11, color: "var(--sub)" }}>{teamName((master.members.find((m) => m.id === e.memberId) || {}).teamId)}</div>
+              {e.date && <div style={{ fontSize: 11.5, color: "var(--sub)", margin: "3px 0" }}>実施日 {e.date}</div>}
+              {e.organizers && e.organizers.length > 0 && (
+                <div style={{ fontSize: 11.5, color: "var(--sub)" }}>
+                  主催 {e.organizers.map((id) => memberName(id)).join("、")}
+                </div>
+              )}
               {e.updatedAt && <div style={{ fontSize: 11.5, color: "var(--sub)", margin: "3px 0" }}>入力 {timeStr(e.updatedAt)}</div>}
               <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
                 <button className="mini" onClick={() => push({ page: "effortInput", effortId: e.id })}>修正</button>
