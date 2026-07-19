@@ -79,6 +79,17 @@
     padding:10px 12px; font-size:13px; color:var(--sub); margin-bottom:12px;}
   .rankcond{font-size:12px; color:var(--sub); margin:0 2px 8px;}
   .histgrid{display:grid; grid-template-columns:1fr 1fr; gap:12px; align-items:start;}
+  .calhead{display:grid; grid-template-columns:repeat(7,1fr); gap:4px; text-align:center;
+    font-size:11px; font-weight:800; margin-bottom:4px;}
+  .cal{display:grid; grid-template-columns:repeat(7,1fr); gap:4px;}
+  .calcell{position:relative; min-height:52px; border-radius:10px; border:1px solid var(--line);
+    background:#FFFFFF; cursor:pointer; display:flex; flex-direction:column; align-items:center;
+    justify-content:flex-start; padding:5px 1px 3px; gap:2px;}
+  .calcell.on{background:var(--accent-soft); border-color:var(--accent);}
+  .calday{font-size:13px; font-weight:700; color:var(--ink); font-variant-numeric:tabular-nums;}
+  .calmark{font-size:9.5px; font-weight:800; color:var(--accent-deep); line-height:1.2;}
+  .calmark.ok{color:var(--ok);}
+  .calmark.ng{color:#fff; background:var(--accent); border-radius:6px; padding:1px 4px;}
   .statgrid{display:grid; grid-template-columns:1fr 1fr; gap:14px; margin-top:10px;}
   .statlabel{font-size:12px; font-weight:800; color:var(--sub); letter-spacing:.06em;}
   .statval{font-size:26px; font-weight:800; font-variant-numeric:tabular-nums; line-height:1.3;}
@@ -154,7 +165,7 @@ const SITES = [...STORES, "その他"];
 const MIN_RANK_DAYS = 6;
 const DB_ROOT = "sales-app";
 
-const emptyMonth = () => ({ entries: [], effort: [], goals: { team: {}, member: {}, store: {}, teamEffort: {} } });
+const emptyMonth = () => ({ entries: [], effort: [], shifts: {}, goals: { team: {}, member: {}, store: {}, teamEffort: {} } });
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
 const todayStr = () => {
   const d = new Date();
@@ -174,12 +185,13 @@ const shiftMonth = (m, delta) => {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
 };
 const fmt = (n) => (Number(n) || 0).toLocaleString("ja-JP");
+const mdLabel = (ds) => { const p = (ds || "").split("/"); return p.length === 3 ? `${parseInt(p[1], 10)}月${parseInt(p[2], 10)}日` : ds; };
 // pt数値の無害化：負の数・数値以外は0に。小数は第二位まで保持する
 const toPt = (v) => {
   const n = Number(v);
   return Number.isFinite(n) && n > 0 ? Math.round(n * 100) / 100 : 0;
 };
-const normalizeMonth = (mo) => ({ ...emptyMonth(), ...(mo || {}), goals: { team: {}, member: {}, store: {}, teamEffort: {}, ...((mo && mo.goals) || {}) } });
+const normalizeMonth = (mo) => ({ ...emptyMonth(), ...(mo || {}), shifts: (mo && mo.shifts) || {}, goals: { team: {}, member: {}, store: {}, teamEffort: {}, ...((mo && mo.goals) || {}) } });
 
 /* ================= Firebase 接続 ================= */
 const CONFIG_READY = firebaseConfig && firebaseConfig.apiKey && firebaseConfig.apiKey.indexOf("ここに") === -1;
@@ -476,7 +488,7 @@ function StoreDetailPage({ store, data, counts, saveMonth, monthNav }) {
 }
 
 /* ================= ランキング ================= */
-function RankingPage({ master, memberStat, avgOf, teamName, monthNav, teamRankInfo }) {
+function RankingPage({ master, memberStat, avgOf, teamName, monthNav, teamRankInfo, schedOf }) {
   const [tab, setTab] = useState("pt");
   const [tsub, setTsub] = useState("score");
   const medal = (i) => (i === 0 ? "🥇" : i === 1 ? "🥈" : i === 2 ? "🥉" : `${i + 1}.`);
@@ -486,10 +498,11 @@ function RankingPage({ master, memberStat, avgOf, teamName, monthNav, teamRankIn
       {list.length === 0 && <div className="note" style={{ margin: 12 }}>メンバーがいません。</div>}
       {list.map((m, i) => {
         const days = memberStat(m.id).days.size;
+        const sched = schedOf ? schedOf(m.id) : 0;
         return (
           <div key={m.id} className="listrow" style={{ borderTop: i ? "1px solid var(--line)" : "none" }}>
             <span><span style={{ display: "inline-block", width: 34 }}>{medal(i)}</span><b>{m.name}</b>
-              <small style={{ color: days >= MIN_RANK_DAYS ? "var(--ok)" : "var(--accent)", fontWeight: 700 }}>　{days}勤務</small>
+              <small style={{ color: days >= MIN_RANK_DAYS ? "var(--ok)" : "var(--accent)", fontWeight: 700 }}>　{days}勤務{sched > 0 ? `/${sched}勤務` : ""}</small>
               <small style={{ color: "var(--sub)" }}>　{teamName(m.teamId)}</small></span>
             <b style={{ fontVariantNumeric: "tabular-nums", color: "var(--ink)" }}>{value(m)}</b>
           </div>
@@ -757,9 +770,95 @@ function ExportPage({ master, showToast }) {
   );
 }
 
+/* ================= 勤務日カレンダー ================= */
+function ShiftCalendarPage({ master, data, saveMonth, showToast, month, monthNav, back }) {
+  const [teamId, setTeamId] = useState("");
+  const [memberId, setMemberId] = useState("");
+  const [y, mo] = month.split("-").map(Number);
+  const daysInMonth = new Date(y, mo, 0).getDate();
+  const firstWd = new Date(y, mo - 1, 1).getDay();
+  const dstr = (d) => `${y}/${String(mo).padStart(2, "0")}/${String(d).padStart(2, "0")}`;
+  const shifts = (data.shifts || {})[memberId] || [];
+  const selected = new Set(shifts);
+  const entrySet = new Set(data.entries.filter((e) => e.memberId === memberId).map((e) => e.date));
+  const today = todayStr();
+
+  const toggle = async (d) => {
+    if (!memberId) { showToast("先に自分の名前を選択してください"); return; }
+    const ds = dstr(d);
+    const next = selected.has(ds) ? shifts.filter((x) => x !== ds) : [...shifts, ds].sort();
+    await saveMonth({ ...data, shifts: { ...(data.shifts || {}), [memberId]: next } });
+  };
+
+  const cells = [];
+  for (let i = 0; i < firstWd; i++) cells.push(null);
+  for (let d = 1; d <= daysInMonth; d++) cells.push(d);
+
+  return (
+    <div>
+      {monthNav}
+      <div className="card">
+        <StaffPicker master={master} teamId={teamId} memberId={memberId}
+          onTeam={(t) => { setTeamId(t); setMemberId(""); }} onMember={setMemberId} />
+      </div>
+      {memberId ? (
+        <div className="card">
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+            <b>{monthLabel(month)}の出勤予定</b>
+            <span className="rankbadge">{shifts.length}日</span>
+          </div>
+          <div className="calhead">
+            {["日", "月", "火", "水", "木", "金", "土"].map((w, i) => (
+              <span key={w} style={{ color: i === 0 ? "var(--accent)" : i === 6 ? "#215787" : "var(--sub)" }}>{w}</span>
+            ))}
+          </div>
+          <div className="cal">
+            {cells.map((d, i) => {
+              if (d == null) return <span key={`e${i}`} />;
+              const ds = dstr(d);
+              const on = selected.has(ds);
+              const past = ds < today;
+              const missing = on && past && !entrySet.has(ds);
+              const done = on && past && entrySet.has(ds);
+              return (
+                <button key={ds} className={`calcell ${on ? "on" : ""}`} onClick={() => toggle(d)}>
+                  <span className="calday">{d}</span>
+                  {on && !missing && !done && <span className="calmark">出勤</span>}
+                  {done && <span className="calmark ok">✓入力済</span>}
+                  {missing && <span className="calmark ng">未記入</span>}
+                </button>
+              );
+            })}
+          </div>
+          <p style={{ fontSize: 12, color: "var(--sub)", margin: "10px 0 0" }}>
+            日付をタップすると出勤予定のON/OFFが切り替わります（あとから何度でも変更できます）。過ぎた出勤日に成績入力がない場合は「未記入」と表示されます。
+          </p>
+          <button className="wide" style={{ marginTop: 14 }}
+            onClick={() => {
+              if (shifts.length === 0) { showToast("出勤日が1日も選択されていません"); return; }
+              showToast(`${monthLabel(month)}の出勤予定 ${shifts.length}日分を保存しました ✓`);
+              back();
+            }}>
+            ✓ 入力完了（{shifts.length}日）
+          </button>
+        </div>
+      ) : (
+        <div className="note">上で自分の名前を選ぶと、カレンダーが表示されます。</div>
+      )}
+    </div>
+  );
+}
+
 /* ================= 入力履歴（並び替え対応） ================= */
 function HistoryPage({ master, data, saveMonth, showToast, push, memberName, teamName, monthNav }) {
-  const [sortKey, setSortKey] = useState("time");
+  const [salesSort, setSalesSort] = useState("time");
+  const [effortSort, setEffortSort] = useState("time");
+  const [salesSortOpen, setSalesSortOpen] = useState(false);
+  const [effortSortOpen, setEffortSortOpen] = useState(false);
+  const [salesQuery, setSalesQuery] = useState("");
+  const [effortQuery, setEffortQuery] = useState("");
+  const [salesSearchOpen, setSalesSearchOpen] = useState(false);
+  const [effortSearchOpen, setEffortSearchOpen] = useState(false);
   const teamIdxOf = (mid) => {
     const mem = master.members.find((m) => m.id === mid);
     if (!mem) return 9999;
@@ -775,8 +874,22 @@ function HistoryPage({ master, data, saveMonth, showToast, push, memberName, tea
       || memberName(a.memberId).localeCompare(memberName(b.memberId), "ja")
       || (b.date || "").localeCompare(a.date || ""),
   };
-  const sales = [...data.entries].sort(cmp[sortKey] || cmp.time);
-  const efforts = [...data.effort].sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+  const effortCmp = {
+    time: cmp.time,
+    date: cmp.date,
+    team: cmp.team,
+  };
+  const salesOpts = [["time", "入力時間順"], ["date", "日付順"], ["site", "店舗順"], ["team", "チーム順"]];
+  const effortOpts = [["time", "入力時間順"], ["date", "実施日順"], ["team", "チーム順"]];
+  const sq = salesQuery.trim();
+  const eq = effortQuery.trim();
+  const sales = [...data.entries]
+    .filter((e) => !sq || memberName(e.memberId).includes(sq))
+    .sort(cmp[salesSort] || cmp.time);
+  const efforts = [...data.effort]
+    .filter((e) => !eq || memberName(e.memberId).includes(eq))
+    .sort(effortCmp[effortSort] || effortCmp.time);
+  const optLabel = (opts, k) => (opts.find(([key]) => key === k) || [])[1] || "";
   const delSale = async (id) => {
     if (!window.confirm("この販売入力を削除しますか？成績から差し引かれます。")) return;
     await saveMonth({ ...data, entries: data.entries.filter((e) => e.id !== id) });
@@ -795,16 +908,25 @@ function HistoryPage({ master, data, saveMonth, showToast, push, memberName, tea
   return (
     <div>
       {monthNav}
-      <div className="fieldlabel">並び順</div>
-      <div className="chips" style={{ marginBottom: 14 }}>
-        {[["time", "入力時間順"], ["date", "日付順"], ["site", "店舗順"], ["team", "チーム順"]].map(([k, l]) => (
-          <button key={k} className={`chip ${sortKey === k ? "on" : ""}`} onClick={() => setSortKey(k)}>{l}</button>
-        ))}
-      </div>
       <div className="histgrid">
         <div>
-          <div className="sectionlabel" style={{ marginTop: 4 }}>販売入力（{sales.length}件）</div>
-          {sales.length === 0 && <div className="note">この月の販売入力はありません。</div>}
+          <div className="sectionlabel" style={{ marginTop: 4 }}>販売入力（{sales.length}件{sq ? "・検索中" : ""}）</div>
+          <div style={{ display: "flex", gap: 8, marginBottom: 8, flexWrap: "wrap" }}>
+            <button className="mini ghost" onClick={() => setSalesSortOpen(!salesSortOpen)}>並び順：{optLabel(salesOpts, salesSort)} {salesSortOpen ? "▲" : "▼"}</button>
+            <button className="mini ghost" onClick={() => { setSalesSearchOpen(!salesSearchOpen); if (salesSearchOpen) setSalesQuery(""); }}>🔍 メンバー検索{salesSearchOpen ? " ▲" : ""}</button>
+          </div>
+          {salesSortOpen && (
+            <div className="chips" style={{ marginBottom: 8 }}>
+              {salesOpts.map(([k, l]) => (
+                <button key={k} className={`chip ${salesSort === k ? "on" : ""}`} onClick={() => { setSalesSort(k); setSalesSortOpen(false); }}>{l}</button>
+              ))}
+            </div>
+          )}
+          {salesSearchOpen && (
+            <input className="input" style={{ marginBottom: 8 }} placeholder="メンバー名で検索"
+              value={salesQuery} onChange={(ev) => setSalesQuery(ev.target.value)} />
+          )}
+          {sales.length === 0 && <div className="note">{sq ? "該当するメンバーの入力がありません。" : "この月の販売入力はありません。"}</div>}
           {sales.map((e) => (
             <div key={e.id} className="card" style={{ padding: 12 }}>
               <div style={{ display: "flex", justifyContent: "space-between", fontWeight: 700, fontSize: 14 }}>
@@ -828,8 +950,23 @@ function HistoryPage({ master, data, saveMonth, showToast, push, memberName, tea
           ))}
         </div>
         <div>
-          <div className="sectionlabel" style={{ marginTop: 4 }}>努力ポイント入力（{efforts.length}件）</div>
-          {efforts.length === 0 && <div className="note">この月の努力ポイント入力はありません。</div>}
+          <div className="sectionlabel" style={{ marginTop: 4 }}>努力ポイント入力（{efforts.length}件{eq ? "・検索中" : ""}）</div>
+          <div style={{ display: "flex", gap: 8, marginBottom: 8, flexWrap: "wrap" }}>
+            <button className="mini ghost" onClick={() => setEffortSortOpen(!effortSortOpen)}>並び順：{optLabel(effortOpts, effortSort)} {effortSortOpen ? "▲" : "▼"}</button>
+            <button className="mini ghost" onClick={() => { setEffortSearchOpen(!effortSearchOpen); if (effortSearchOpen) setEffortQuery(""); }}>🔍 メンバー検索{effortSearchOpen ? " ▲" : ""}</button>
+          </div>
+          {effortSortOpen && (
+            <div className="chips" style={{ marginBottom: 8 }}>
+              {effortOpts.map(([k, l]) => (
+                <button key={k} className={`chip ${effortSort === k ? "on" : ""}`} onClick={() => { setEffortSort(k); setEffortSortOpen(false); }}>{l}</button>
+              ))}
+            </div>
+          )}
+          {effortSearchOpen && (
+            <input className="input" style={{ marginBottom: 8 }} placeholder="メンバー名で検索"
+              value={effortQuery} onChange={(ev) => setEffortQuery(ev.target.value)} />
+          )}
+          {efforts.length === 0 && <div className="note">{eq ? "該当するメンバーの入力がありません。" : "この月の努力ポイント入力はありません。"}</div>}
           {efforts.map((e) => (
             <div key={e.id} className="card" style={{ padding: 12 }}>
               <div style={{ display: "flex", justifyContent: "space-between", fontWeight: 700, fontSize: 14 }}>
@@ -1098,6 +1235,25 @@ function SalesApp() {
     return { map, total: ranked.length, list };
   }, [master, stats, data]);
 
+  // 未入力チェック：出勤予定日を過ぎたのに販売入力がない日／カレンダー未記入者
+  const alertInfo = useMemo(() => {
+    const today = todayStr();
+    const entryDays = {};
+    for (const e of data.entries) (entryDays[e.memberId] = entryDays[e.memberId] || new Set()).add(e.date);
+    const missing = [];
+    for (const [mid, days] of Object.entries(data.shifts || {})) {
+      if (!master.members.some((m) => m.id === mid)) continue;
+      for (const d of days || []) {
+        if (d < today && !(entryDays[mid] && entryDays[mid].has(d))) missing.push({ mid, date: d });
+      }
+    }
+    missing.sort((a, b) => a.date.localeCompare(b.date));
+    const noCalendar = master.members.filter((m) => !((data.shifts || {})[m.id] || []).length);
+    return { missing, noCalendar };
+  }, [data, master]);
+
+  const schedOf = (id) => ((data.shifts || {})[id] || []).length;
+
   const monthNav = <MonthNav month={month} setMonth={setMonth} />;
 
   /* ---------- 各ページ（状態を持たないものはインライン定義） ---------- */
@@ -1127,6 +1283,57 @@ function SalesApp() {
       </div>
       {master.members.length === 0 && (
         <div className="note" style={{ marginTop: 14 }}>まずは下の「メンバー・チーム管理」からチームとメンバーを登録してください。</div>
+      )}
+      <button className="menucard" style={{ width: "100%", marginTop: 12, flexDirection: "row", justifyContent: "center", gap: 10, padding: "12px" }} onClick={() => push({ page: "calendar" })}>
+        <span className="menuicon" style={{ background: "#EDE7F8", margin: 0, width: 38, height: 38, fontSize: 18 }}>🗓</span>
+        勤務日カレンダー（出勤予定の入力）
+      </button>
+      {master.members.length > 0 && (
+        <div className="histgrid" style={{ marginTop: 12 }}>
+          <div className="card" style={{ marginBottom: 0, background: alertInfo.missing.length ? "var(--accent-soft)" : "var(--surface)" }}>
+            <b style={{ fontSize: 15, color: alertInfo.missing.length ? "var(--accent-deep)" : "var(--ok)" }}>
+              {alertInfo.missing.length ? "⚠ 未入力の件数があります" : "✓ 未入力はありません"}
+            </b>
+            {[...master.teams, { id: "__none", name: "未所属" }].map((t) => {
+              const list = alertInfo.missing.filter((x) => {
+                const mem = master.members.find((m) => m.id === x.mid);
+                const tid = mem && master.teams.some((tt) => tt.id === mem.teamId) ? mem.teamId : "__none";
+                return tid === t.id;
+              });
+              if (list.length === 0) return null;
+              return (
+                <div key={t.id} style={{ marginTop: 8 }}>
+                  <div style={{ fontSize: 12, fontWeight: 800, color: "var(--accent-deep)", opacity: .75, borderBottom: "1px solid rgba(182,42,68,.25)", paddingBottom: 2, marginBottom: 4 }}>{t.name}</div>
+                  {list.map((x) => (
+                    <div key={x.mid + x.date} style={{ fontSize: 15, color: "var(--accent-deep)", fontWeight: 800, padding: "3px 0" }}>
+                      {memberName(x.mid)}　{mdLabel(x.date)}
+                    </div>
+                  ))}
+                </div>
+              );
+            })}
+          </div>
+          <div className="card" style={{ marginBottom: 0 }}>
+            <b style={{ fontSize: 15 }}>🗓 カレンダー未記入者</b>
+            {alertInfo.noCalendar.length === 0
+              ? <div style={{ fontSize: 13, color: "var(--ok)", fontWeight: 700, marginTop: 6 }}>全員記入済みです</div>
+              : [...master.teams, { id: "__none", name: "未所属" }].map((t) => {
+                  const list = alertInfo.noCalendar.filter((m) => {
+                    const tid = master.teams.some((tt) => tt.id === m.teamId) ? m.teamId : "__none";
+                    return tid === t.id;
+                  });
+                  if (list.length === 0) return null;
+                  return (
+                    <div key={t.id} style={{ marginTop: 8 }}>
+                      <div style={{ fontSize: 12, fontWeight: 800, color: "var(--sub)", borderBottom: "1px solid var(--line)", paddingBottom: 2, marginBottom: 4 }}>{t.name}</div>
+                      {list.map((m) => (
+                        <div key={m.id} style={{ fontSize: 15, fontWeight: 800, padding: "3px 0" }}>{m.name}</div>
+                      ))}
+                    </div>
+                  );
+                })}
+          </div>
+        </div>
       )}
       <button className="wide ghostwide" style={{ marginTop: 14 }} onClick={() => push({ page: "settings" })}>⚙ メンバー・チーム管理</button>
       <p style={{ color: "var(--sub)", fontSize: 12, textAlign: "center", marginTop: 18, lineHeight: 1.7 }}>
@@ -1313,6 +1520,7 @@ function SalesApp() {
     effortInput: view.effortId ? "努力ポイントの修正" : "成績入力（努力ポイント）",
     history: "入力履歴", stores: "店舗成績", store: view.store || "店舗成績",
     ranking: "ランキング", settings: "メンバー・チーム管理", export: "全データ確認・エクスポート",
+    calendar: "勤務日カレンダー",
   };
 
   const body = () => {
@@ -1328,7 +1536,8 @@ function SalesApp() {
       case "history": return <HistoryPage master={master} data={data} saveMonth={saveMonth} showToast={showToast} push={push} memberName={memberName} teamName={teamName} monthNav={monthNav} />;
       case "stores": return <Stores />;
       case "store": return <StoreDetailPage key={view.store} store={view.store} data={data} counts={stats.byStore[view.store] || {}} saveMonth={saveMonth} monthNav={monthNav} />;
-      case "ranking": return <RankingPage master={master} memberStat={memberStat} avgOf={avgOf} teamName={teamName} monthNav={monthNav} teamRankInfo={teamRankInfo} />;
+      case "ranking": return <RankingPage master={master} memberStat={memberStat} avgOf={avgOf} teamName={teamName} monthNav={monthNav} teamRankInfo={teamRankInfo} schedOf={schedOf} />;
+      case "calendar": return <ShiftCalendarPage master={master} data={data} saveMonth={saveMonth} showToast={showToast} month={month} monthNav={monthNav} back={back} />;
       case "settings": return <SettingsPage master={master} saveMaster={saveMaster} showToast={showToast} />;
       case "export": return <ExportPage master={master} showToast={showToast} />;
       default: return <Home />;
